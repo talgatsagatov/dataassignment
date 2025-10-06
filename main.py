@@ -29,6 +29,37 @@ QUERIES = {
         GROUP BY month
         ORDER BY month;
     """,
+
+    "top_categories": """
+        SELECT COALESCE(t.product_category_name_english, p.product_category_name) AS category,
+               ROUND(SUM(oi.price + oi.freight_value), 2) AS revenue
+        FROM olist.order_items oi
+        JOIN olist.products p USING (product_id)
+        LEFT JOIN olist.product_category_name_translation t
+               ON t.product_category_name = p.product_category_name
+        GROUP BY category
+        ORDER BY revenue DESC
+        LIMIT 10;
+    """,
+
+    "top_cities_orders": """
+        SELECT c.customer_city, COUNT(*) AS orders
+        FROM olist.orders o
+        JOIN olist.customers c USING (customer_id)
+        GROUP BY c.customer_city
+        ORDER BY orders DESC
+        LIMIT 10;
+    """,
+
+    "avg_order_value": """
+        SELECT ROUND(AVG(order_total), 2) AS avg_order_value
+        FROM (
+          SELECT order_id, SUM(price + freight_value) AS order_total
+          FROM olist.order_items
+          GROUP BY order_id
+        ) s;
+    """,
+
     "payment_mix": """
         WITH counts AS (
           SELECT payment_type, COUNT(*) AS cnt
@@ -41,15 +72,52 @@ QUERIES = {
         FROM counts
         ORDER BY pct DESC;
     """,
-    "top_categories": """
-        SELECT COALESCE(t.product_category_name_english, p.product_category_name) AS category,
-               ROUND(SUM(oi.price + oi.freight_value),2) AS revenue
+
+    "delivery_speed_by_month": """
+        SELECT DATE_TRUNC('month', order_purchase_timestamp)::date AS month,
+               ROUND(AVG(EXTRACT(EPOCH FROM (order_delivered_customer_date - order_purchase_timestamp)))/86400.0, 2) AS avg_days
+        FROM olist.orders
+        WHERE order_delivered_customer_date IS NOT NULL
+        GROUP BY month
+        ORDER BY month;
+    """,
+
+    "top_sellers_revenue": """
+        SELECT s.seller_id,
+               s.seller_city,
+               ROUND(SUM(oi.price + oi.freight_value), 2) AS revenue
         FROM olist.order_items oi
-        JOIN olist.products p USING (product_id)
+        JOIN olist.sellers s USING (seller_id)
+        GROUP BY s.seller_id, s.seller_city
+        ORDER BY revenue DESC
+        LIMIT 10;
+    """,
+
+    "order_status_distribution": """
+        SELECT order_status, COUNT(*) AS cnt
+        FROM olist.orders
+        GROUP BY order_status
+        ORDER BY cnt DESC;
+    """,
+
+    "avg_freight_share_pct": """
+        SELECT ROUND(AVG(freight_value / NULLIF(price + freight_value, 0)) * 100, 2) AS avg_freight_share_pct
+        FROM olist.order_items;
+    """,
+
+    "fastest_categories": """
+        SELECT COALESCE(t.product_category_name_english, p.product_category_name) AS category,
+               ROUND(AVG(EXTRACT(EPOCH FROM (o.order_delivered_customer_date - o.order_purchase_timestamp)))/86400.0, 2) AS avg_days,
+               COUNT(*) AS n_items
+        FROM olist.orders o
+        JOIN olist.order_items oi USING(order_id)
+        JOIN olist.products p USING(product_id)
         LEFT JOIN olist.product_category_name_translation t
                ON t.product_category_name = p.product_category_name
+        WHERE o.order_delivered_customer_date IS NOT NULL
         GROUP BY category
-        ORDER BY revenue DESC
+        HAVING COUNT(*) > 100
+        ORDER BY avg_days ASC
         LIMIT 10;
     """
 }
@@ -68,10 +136,10 @@ def main():
     for name, sql in QUERIES.items():
         print(f"\n--- Running: {name} ---")
         df = run_query(conn, sql)
-        if not df.empty:
-            print(df.head(10).to_string(index=False))
-        else:
+        if df.empty:
             print("(no rows)")
+        else:
+            print(df.head(10).to_string(index=False))
         csv_path = os.path.join(out_dir, f"{name}.csv")
         df.to_csv(csv_path, index=False, encoding="utf-8")
         print(f"Saved: {csv_path} ({len(df)} rows)")
